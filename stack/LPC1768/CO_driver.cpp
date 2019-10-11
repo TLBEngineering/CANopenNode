@@ -440,8 +440,6 @@ void CO_CANrxInterrupt(CO_CANmodule_t *CANmodule){
 }
 
 void CO_CANtxInterrupt(CO_CANmodule_t *CANmodule){
-    irq |= MBED_CAN_REG->ICR;
-
     /* Clear interrupt flag */
 
     /* First CAN message (bootup) was sent successfully */
