@@ -392,94 +392,87 @@ void CO_CANverifyErrors(CO_CANmodule_t *CANmodule){
 
 
 /******************************************************************************/
-void CO_CANinterrupt(CO_CANmodule_t *CANmodule){
-    uint16_t intStatus;
+void CO_CANrxInterrupt(CO_CANmodule_t *CANmodule){
+    CO_CANrxMsg_t rcvMsgBuf;    /* buffer for the received message in CAN module */
+    CO_CANrxMsg_t *rcvMsg;      /* pointer to received message in CAN module */
+    uint16_t index;             /* index of received message */
+    uint32_t rcvMsgIdent;       /* identifier of the received message */
+    CO_CANrx_t *buffer = NULL;  /* receive message buffer from CO_CANmodule_t object. */
+    bool_t msgMatched = false;
+    CANMessage msg;
 
-    intStatus = MBED_CAN_REG->ICR;
-
-    /* receive interrupt */
-    if (intStatus & 0x1) {
-        CO_CANrxMsg_t rcvMsgBuf;    /* buffer for the received message in CAN module */
-        CO_CANrxMsg_t *rcvMsg;      /* pointer to received message in CAN module */
-        uint16_t index;             /* index of received message */
-        uint32_t rcvMsgIdent;       /* identifier of the received message */
-        CO_CANrx_t *buffer = NULL;  /* receive message buffer from CO_CANmodule_t object. */
-        bool_t msgMatched = false;
-        CANMessage msg;
-
-        CANport->read(msg);
-        fromCANMessage(&msg, &rcvMsgBuf); /* get message from module here */
-        rcvMsg = &rcvMsgBuf;
-        rcvMsgIdent = rcvMsg->ident;
-        if(CANmodule->useCANrxFilters){
-            /* CAN module filters are used. Message with known 11-bit identifier has */
-            /* been received */
-            index = 0;  /* get index of the received message here. Or something similar */
-            if(index < CANmodule->rxSize){
-                buffer = &CANmodule->rxArray[index];
-                /* verify also RTR */
-                if(((rcvMsgIdent ^ buffer->ident) & buffer->mask) == 0U){
-                    msgMatched = true;
-                }
+    CANport->read(msg);
+    fromCANMessage(&msg, &rcvMsgBuf); /* get message from module here */
+    rcvMsg = &rcvMsgBuf;
+    rcvMsgIdent = rcvMsg->ident;
+    if(CANmodule->useCANrxFilters){
+        /* CAN module filters are used. Message with known 11-bit identifier has */
+        /* been received */
+        index = 0;  /* get index of the received message here. Or something similar */
+        if(index < CANmodule->rxSize){
+            buffer = &CANmodule->rxArray[index];
+            /* verify also RTR */
+            if(((rcvMsgIdent ^ buffer->ident) & buffer->mask) == 0U){
+                msgMatched = true;
             }
         }
-        else{
-            /* CAN module filters are not used, message with any standard 11-bit identifier */
-            /* has been received. Search rxArray form CANmodule for the same CAN-ID. */
-            buffer = &CANmodule->rxArray[0];
-            for(index = CANmodule->rxSize; index > 0U; index--){
-                if(((rcvMsgIdent ^ buffer->ident) & buffer->mask) == 0U){
-                    msgMatched = true;
-                    break;
-                }
-                buffer++;
+    }
+    else{
+        /* CAN module filters are not used, message with any standard 11-bit identifier */
+        /* has been received. Search rxArray form CANmodule for the same CAN-ID. */
+        buffer = &CANmodule->rxArray[0];
+        for(index = CANmodule->rxSize; index > 0U; index--){
+            if(((rcvMsgIdent ^ buffer->ident) & buffer->mask) == 0U){
+                msgMatched = true;
+                break;
             }
+            buffer++;
         }
-
-        /* Call specific function, which will process the message */
-        if(msgMatched && (buffer != NULL) && (buffer->pFunct != NULL)){
-            buffer->pFunct(buffer->object, rcvMsg);
-        }
-
-        /* Clear interrupt flag */
-        /* The interrupt flag is cleaned by CANport.read() function call */
     }
 
+    /* Call specific function, which will process the message */
+    if(msgMatched && (buffer != NULL) && (buffer->pFunct != NULL)){
+        buffer->pFunct(buffer->object, rcvMsg);
+    }
 
-    /* transmit interrupt */
-    else if ((intStatus & 0x2) || (intStatus & 0x200) || (intStatus & 0x400)) {
-        /* Clear interrupt flag */
+    /* Clear interrupt flag */
+    /* The interrupt flag is cleaned by CANport.read() function call */
+}
 
-        /* First CAN message (bootup) was sent successfully */
-        CANmodule->firstCANtxMessage = false;
-        /* clear flag from previous message */
-        CANmodule->bufferInhibitFlag = false;
-        /* Are there any new messages waiting to be send */
-        if(CANmodule->CANtxCount > 0U){
-            uint16_t i;             /* index of transmitting message */
+void CO_CANtxInterrupt(CO_CANmodule_t *CANmodule){
+    irq |= MBED_CAN_REG->ICR;
 
-            /* first buffer */
-            CO_CANtx_t *buffer = &CANmodule->txArray[0];
-            /* search through whole array of pointers to transmit message buffers. */
-            for(i = CANmodule->txSize; i > 0U; i--){
-                /* if message buffer is full, send it. */
-                if(buffer->bufferFull){
-                    buffer->bufferFull = false;
-                    CANmodule->CANtxCount--;
+    /* Clear interrupt flag */
 
-                    /* Copy message to CAN buffer */
-                    CANmodule->bufferInhibitFlag = buffer->syncFlag;
-                    /* canSend... */
-                    CANport->write(toCANMessage(buffer));
-                    break;                      /* exit for loop */
-                }
-                buffer++;
-            }/* end of for loop */
+    /* First CAN message (bootup) was sent successfully */
+    CANmodule->firstCANtxMessage = false;
+    /* clear flag from previous message */
+    CANmodule->bufferInhibitFlag = false;
+    /* Are there any new messages waiting to be send */
+    if(CANmodule->CANtxCount > 0U){
+        uint16_t i;             /* index of transmitting message */
 
-            /* Clear counter if no more messages */
-            if(i == 0U){
-                CANmodule->CANtxCount = 0U;
+        /* first buffer */
+        CO_CANtx_t *buffer = &CANmodule->txArray[0];
+        /* search through whole array of pointers to transmit message buffers. */
+        for(i = CANmodule->txSize; i > 0U; i--){
+            /* if message buffer is full, send it. */
+            if(buffer->bufferFull){
+                buffer->bufferFull = false;
+                CANmodule->CANtxCount--;
+
+                /* Copy message to CAN buffer */
+                CANmodule->bufferInhibitFlag = buffer->syncFlag;
+                /* canSend... */
+                CANport->write(toCANMessage(buffer));
+                break;                      /* exit for loop */
             }
+            buffer++;
+        }/* end of for loop */
+
+        /* Clear counter if no more messages */
+        if(i == 0U){
+            CANmodule->CANtxCount = 0U;
         }
     }
 }
